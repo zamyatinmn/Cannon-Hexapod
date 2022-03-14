@@ -42,6 +42,29 @@ websock.onmessage = function(evt) {console.log(evt);var e = document.getElementB
 WebSocketsServer webSocket = WebSocketsServer(81);
 ESP8266WebServer server(80);
 
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length){
+  switch(type) {
+    case WStype_DISCONNECTED:
+      break;
+    case WStype_CONNECTED:
+      {
+        IPAddress ip = webSocket.remoteIP(num);
+      }
+      break;
+    case WStype_TEXT:
+      lastComm = CommOut; CommOut = "";
+      for(size_t i = 0;i < length;i++) CommOut += ((char) payload[i]);
+      // send data to all connected clients
+      webSocket.broadcastTXT(payload, length);
+      break;
+    case WStype_BIN:
+      hexdump(payload, length);
+      // echo data back to browser
+      webSocket.sendBIN(num, payload, length);
+      break;default:break;
+  }
+}
+
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT); 
   Serial.begin(9600);
@@ -73,20 +96,6 @@ void setup() {
 
 }
 
-void Send_Comm() {
-  String SendString;int i;
-  for (i = 1;i < 32;i += 1) {
-    if (SMov[i]>=600 and SMov[i]<=2280){
-      SendString = SendString +"#" +i +"P" +String(SMov[i]);
-    }
-  }
-  digitalWrite(LED_BUILTIN, HIGH); 
-  digitalWrite(D5, LOW); 
-  Serial.println(SendString +"T"+String(StepSpeed));wait_serial_return_ok();  //--> it will wait until servo driver return OK (it will loop when u don't connect the servo driver)
-  digitalWrite(LED_BUILTIN, LOW); 
-  digitalWrite(D5, HIGH); 
-}
-
 void wait_serial_return_ok()
 {  
  // int TimeOut=0; 
@@ -106,6 +115,20 @@ void wait_serial_return_ok()
     
   //  if(TimeOut > 800000) break;
   
+}
+
+void Send_Comm() {
+  String SendString;int i;
+  for (i = 1;i < 32;i += 1) {
+    if (SMov[i]>=600 and SMov[i]<=2280){
+      SendString = SendString +"#" +i +"P" +String(SMov[i]);
+    }
+  }
+  digitalWrite(LED_BUILTIN, HIGH); 
+  digitalWrite(D5, LOW); 
+  Serial.println(SendString +"T"+String(StepSpeed));wait_serial_return_ok();  //--> it will wait until servo driver return OK (it will loop when u don't connect the servo driver)
+  digitalWrite(LED_BUILTIN, LOW); 
+  digitalWrite(D5, HIGH); 
 }
 
 //================================================================================= Servo Move =======================================================================
@@ -357,7 +380,7 @@ enum State {
   MoveRight,
   TurnLeft,
   TurnRight,
-  Dance,
+  GoDance,
   Shoot,
   Wave,
   Initial,
@@ -372,8 +395,34 @@ enum State {
   TwistRight,
   SpeedWalk,
   SpeedRun,
-  Default = ""
+  Default
 };
+
+State mapToState(String commOut) {
+  if (commOut == "w 0 1") return State::Stop;
+  if (commOut == "w 1 1") return State::Forward;
+  if (commOut == "w 2 1") return State::Backward;
+  if (commOut == "w 3 1") return State::MoveLeft;
+  if (commOut == "w 4 1") return State::MoveRight;
+  if (commOut == "w 20") return State::TurnLeft;
+  if (commOut == "w 21") return State::TurnRight;
+  if (commOut == "s 1") return State::GoDance;
+  if (commOut == "w 5 3") return State::Shoot;
+  if (commOut == "w 6 3") return State::Wave;
+  if (commOut == "w 15") return State::Initial;
+  if (commOut == "w 12") return State::ServiceMode;
+  if (commOut == "w 11 5") return State::BodyLeft;
+  if (commOut == "w 10 5") return State::BodyRight;
+  if (commOut == "w 8 5") return State::HeadUp;
+  if (commOut == "w 9 5") return State::HeadDown;
+  if (commOut == "w 13") return State::BodyHigh;
+  if (commOut == "w 14") return State::BodyLow;
+  if (commOut == "w 16") return State::TwistLeft;
+  if (commOut == "w 17") return State::TwistRight;
+  if (commOut == "w 0 0") return State::SpeedWalk;
+  if (commOut == "w 7 1") return State::SpeedRun;
+  return State::Default;
+}
 
 void loop() {
    if (Serial.available() > 0){
@@ -395,54 +444,29 @@ void loop() {
    webSocket.loop();
    server.handleClient();
 
-    switch (CommOut)
-    {
-    case "w 0 1": Move_STP(); break;
-    case "w 1 1": Move_FWD(); break;
-    case "w 2 1": Move_BWD(); break;
-    case "w 3 1": Turn_LFT(); break;
-    case "w 4 1": Turn_RGT(); break;
-    case "w 20": Slide_LFT(); break;
-    case "w 21": Slide_RGT(); break;
-    case "s 1": lastSpeed = StepSpeed;StepSpeed = 500; Dance(); StepSpeed = lastSpeed; CommOut=lastComm; break;
-    case "w 5 3": lastSpeed = StepSpeed; StepSpeed = 300; Shoot_cannon(); StepSpeed = lastSpeed; CommOut=lastComm; break;
-    case "w 6 3": lastSpeed = StepSpeed;StepSpeed = 300; Move_WAV(); StepSpeed = lastSpeed; CommOut=lastComm; break;
-    case "w 15": Pos_INT(); CommOut=lastComm; break;
-    case "w 12": Pos_SRV(); CommOut=lastComm; break;
-    case "w 11 5": Adj_LF(); CommOut=lastComm; break;
-    case "w 10 5": Adj_RG(); CommOut=lastComm; break;
-    case "w 8 5": Adj_HU(); CommOut=lastComm; break;
-    case "w 9 5": Adj_HD(); CommOut=lastComm; break;
-    case "w 13": Adj_HG(); CommOut=lastComm; break;
-    case "w 14": Adj_LW(); CommOut=lastComm; break;
-    case "w 16": Adj_TL(); CommOut=lastComm; break;
-    case "w 17": Adj_TR(); CommOut=lastComm; break;
-    case "w 0 0": StepSpeed = 300; CommOut=lastComm; break;
-    case "w 7 1": StepSpeed = 50; CommOut=lastComm; break;
+    switch (mapToState(CommOut)){
+    case Stop: Move_STP(); break;
+    case Forward: Move_FWD(); break;
+    case Backward: Move_BWD(); break;
+    case MoveLeft: Turn_LFT(); break;
+    case MoveRight: Turn_RGT(); break;
+    case TurnLeft: Slide_LFT(); break;
+    case TurnRight: Slide_RGT(); break;
+    case GoDance: lastSpeed = StepSpeed;StepSpeed = 500; Dance(); StepSpeed = lastSpeed; CommOut=lastComm; break;
+    case Shoot: lastSpeed = StepSpeed; StepSpeed = 300; Shoot_cannon(); StepSpeed = lastSpeed; CommOut=lastComm; break;
+    case Wave: lastSpeed = StepSpeed;StepSpeed = 300; Move_WAV(); StepSpeed = lastSpeed; CommOut=lastComm; break;
+    case Initial: Pos_INT(); CommOut=lastComm; break;
+    case ServiceMode: Pos_SRV(); CommOut=lastComm; break;
+    case BodyLeft: Adj_LF(); CommOut=lastComm; break;
+    case BodyRight: Adj_RG(); CommOut=lastComm; break;
+    case HeadUp: Adj_HU(); CommOut=lastComm; break;
+    case HeadDown: Adj_HD(); CommOut=lastComm; break;
+    case BodyHigh: Adj_HG(); CommOut=lastComm; break;
+    case BodyLow: Adj_LW(); CommOut=lastComm; break;
+    case TwistLeft: Adj_TL(); CommOut=lastComm; break;
+    case TwistRight: Adj_TR(); CommOut=lastComm; break;
+    case SpeedWalk: StepSpeed = 300; CommOut=lastComm; break;
+    case SpeedRun: StepSpeed = 50; CommOut=lastComm; break;
     default: break;
-    }
-}
-
-void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length)
-{
-  switch(type) {
-    case WStype_DISCONNECTED:
-      break;
-    case WStype_CONNECTED:
-      {
-        IPAddress ip = webSocket.remoteIP(num);
-      }
-      break;
-    case WStype_TEXT:
-      lastComm = CommOut; CommOut = "";
-      for(size_t i = 0;i < length;i++) CommOut += ((char) payload[i]);
-      // send data to all connected clients
-      webSocket.broadcastTXT(payload, length);
-      break;
-    case WStype_BIN:
-      hexdump(payload, length);
-      // echo data back to browser
-      webSocket.sendBIN(num, payload, length);
-      break;default:break;
-  }
+    };
 }
